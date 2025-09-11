@@ -1,0 +1,19 @@
+syntax = "proto3";
+package lad;
+option go_package = "github.com/Manny-14/LAD/proto";
+
+// Contains the structure for a single log entry
+message LogEntry {
+    int64 timestamp = 1;
+    Severity severity = 2;
+    string message = 3;
+}
+
+// Enum for the different log severity levels.
+enum Severity {
+    UNKNOWN = 0; // default for logs with unidentified severity
+    INFO = 1;
+    WARN = 2;
+    ERROR = 3;
+    FATAL = 4;
+}
