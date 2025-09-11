@@ -1,11 +1,13 @@
 syntax = "proto3";
-package lad;
-option go_package = "github.com/Manny-14/LAD/proto";
+package log;
+option go_package = "gen/proto/log;log_go_proto";
 
 // Contains the structure for a single log entry
 message LogEntry {
     int64 timestamp = 1;
+    int32 pid = 4;
     Severity severity = 2;
+    string component = 5;
     string message = 3;
 }
 
