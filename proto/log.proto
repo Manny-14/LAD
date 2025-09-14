@@ -16,6 +16,9 @@ enum Severity {
     UNKNOWN = 0; // default for logs with unidentified severity
     INFO = 1;
     WARN = 2;
+    // Only INFO and WARN severities are available in HDFS logs at this time
+    // Keeping the other severities just in case
+    // might decide to deprecate them later or maybe classify them in some way?
     ERROR = 3;
     FATAL = 4;
 }
