@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import tempfile
@@ -51,10 +52,11 @@ class IsolationForestTrainingCLITests(unittest.TestCase):
         df.to_csv(path, index=False)
         return path
 
-    def _train_smoke_model(self) -> tuple[Path, Path, Path]:
+    def _train_smoke_model(self) -> tuple[Path, Path, Path, Path]:
         data_path = self._write_tiny_sequences()
         model_path = self.tmp_path / "model.joblib"
         vocab_path = self.tmp_path / "vocab.json"
+        threshold_path = self.tmp_path / "threshold.json"
 
         cmd = [
             sys.executable,
@@ -67,6 +69,8 @@ class IsolationForestTrainingCLITests(unittest.TestCase):
             "--skip-grid-search",
             "--vocab-output-path",
             str(vocab_path),
+            "--threshold-output-path",
+            str(threshold_path),
         ]
 
         result = subprocess.run(
@@ -85,16 +89,23 @@ class IsolationForestTrainingCLITests(unittest.TestCase):
 
         self.assertTrue(model_path.exists(), "Trained model artifact was not created.")
         self.assertTrue(vocab_path.exists(), "Event vocabulary JSON was not created.")
+        self.assertTrue(threshold_path.exists(), "Threshold JSON was not created.")
 
-        return data_path, model_path, vocab_path
+        payload = json.loads(threshold_path.read_text(encoding="utf-8"))
+        self.assertIn("score_threshold", payload)
+        self.assertIn("algorithm", payload)
+        self.assertIn("score_direction", payload)
+
+        return data_path, model_path, vocab_path, threshold_path
 
     def test_cli_trains_and_creates_model(self) -> None:
-        _, model_path, vocab_path = self._train_smoke_model()
+        _, model_path, vocab_path, threshold_path = self._train_smoke_model()
         self.assertTrue(model_path.exists())
         self.assertTrue(vocab_path.exists())
+        self.assertTrue(threshold_path.exists())
 
     def test_inference_cli_generates_predictions(self) -> None:
-        data_path, model_path, vocab_path = self._train_smoke_model()
+        data_path, model_path, vocab_path, threshold_path = self._train_smoke_model()
         block_index_path = self._write_block_index(rows=6)
         output_path = self.tmp_path / "predictions.csv"
 
@@ -108,6 +119,8 @@ class IsolationForestTrainingCLITests(unittest.TestCase):
             str(model_path),
             "--vocab-path",
             str(vocab_path),
+            "--threshold-path",
+            str(threshold_path),
             "--block-index-path",
             str(block_index_path),
             "--output-path",
@@ -133,6 +146,9 @@ class IsolationForestTrainingCLITests(unittest.TestCase):
         self.assertIn("BlockId", predictions_df.columns)
         self.assertIn("prediction", predictions_df.columns)
         self.assertIn("anomaly_score", predictions_df.columns)
+        self.assertIn("decision_threshold", predictions_df.columns)
+        self.assertIn("score_direction", predictions_df.columns)
+        self.assertIn("algorithm", predictions_df.columns)
         self.assertEqual(len(predictions_df), 6)
 
 

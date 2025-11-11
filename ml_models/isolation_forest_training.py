@@ -7,9 +7,9 @@ from pathlib import Path
 import joblib
 import numpy as np
 from scipy.sparse import lil_matrix
-from sklearn.ensemble import IsolationForest
+from sklearn.ensemble import IsolationForest, RandomForestClassifier
 from sklearn.metrics import classification_report
-from sklearn.metrics import f1_score, make_scorer
+from sklearn.metrics import f1_score, make_scorer, precision_recall_curve
 from sklearn.model_selection import GridSearchCV, train_test_split
 
 """Train an Isolation Forest log anomaly detector from pre-built HDFS sequences.
@@ -28,6 +28,8 @@ The input NPZ should be produced by `scripts/build_sequences.py` and contain
 DEFAULT_DATA_PATH = Path("preprocessed/HDFS_sequences.npz")
 DEFAULT_MODEL_OUTPUT_PATH = Path("ml_models/isolation_forest_model.joblib")
 DEFAULT_VOCAB_OUTPUT_PATH = Path("ml_models/isolation_forest_event_vocab.json")
+DEFAULT_THRESHOLD_OUTPUT_PATH = Path("ml_models/isolation_forest_threshold.json")
+ALGORITHM_CHOICES = ("isolation-forest", "random-forest")
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,6 +58,26 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_VOCAB_OUTPUT_PATH,
         help="Where to save the JSON mapping of event IDs to column indices.",
+    )
+    parser.add_argument(
+        "--threshold-output-path",
+        type=Path,
+        default=DEFAULT_THRESHOLD_OUTPUT_PATH,
+        help="Where to write the calibrated decision threshold JSON.",
+    )
+    parser.add_argument(
+        "--algorithm",
+        choices=ALGORITHM_CHOICES,
+        default="isolation-forest",
+        help=(
+            "Training algorithm to use. 'random-forest' fits a supervised classifier (requires "
+            "--allow-supervised), while 'isolation-forest' keeps the unsupervised detector."
+        ),
+    )
+    parser.add_argument(
+        "--allow-supervised",
+        action="store_true",
+        help="Acknowledge that you intend to train a supervised model (required for --algorithm random-forest).",
     )
     parser.add_argument(
         "--skip-grid-search",
@@ -108,6 +130,80 @@ def map_if_predictions(y_pred: np.ndarray) -> np.ndarray:
     return np.array([1 if pred == -1 else 0 for pred in y_pred])
 
 
+def split_for_calibration(
+    X_train_full, y_train_full, calibration_fraction: float = 0.2
+):
+    """Split training data into model-training and calibration subsets.
+
+    Falls back to using the full training data for calibration if class counts are too small
+    for a stratified split (e.g., in unit tests with tiny synthetic datasets).
+    """
+
+    unique_labels, counts = np.unique(y_train_full, return_counts=True)
+    if unique_labels.size < 2 or np.min(counts) < 2:
+        print(
+            "Insufficient class diversity for a separate calibration split; "
+            "reusing full training data."
+        )
+        return X_train_full, X_train_full, y_train_full, y_train_full
+
+    X_train, X_calibration, y_train, y_calibration = train_test_split(
+        X_train_full,
+        y_train_full,
+        test_size=calibration_fraction,
+        random_state=42,
+        stratify=y_train_full,
+    )
+    return X_train, X_calibration, y_train, y_calibration
+
+
+def find_optimal_threshold(
+    scores: np.ndarray,
+    labels: np.ndarray,
+    *,
+    lower_scores_are_more_anomalous: bool,
+) -> tuple[float, dict[str, float]]:
+    """Compute the anomaly score threshold that maximizes F1 on calibration data."""
+    if scores.size == 0 or labels.size == 0:
+        return 0.0, {"precision": 0.0, "recall": 0.0, "f1": 0.0}
+
+    working_scores = -scores if lower_scores_are_more_anomalous else scores
+    precision, recall, thresholds = precision_recall_curve(labels, working_scores)
+    if thresholds.size == 0:
+        # Fallback to default decision boundary at 0 if we only observed one class
+        baseline_f1 = float(
+            2
+            * precision[-1]
+            * recall[-1]
+            / max(precision[-1] + recall[-1], 1e-12)
+        )
+        default_threshold = 0.0 if lower_scores_are_more_anomalous else 0.5
+        return default_threshold, {
+            "precision": float(precision[-1]),
+            "recall": float(recall[-1]),
+            "f1": baseline_f1,
+        }
+
+    usable_precision = precision[:-1]
+    usable_recall = recall[:-1]
+    f1_scores = 2 * usable_precision * usable_recall / np.clip(
+        usable_precision + usable_recall, 1e-12, None
+    )
+    best_index = int(np.nanargmax(f1_scores))
+
+    best_threshold = float(
+        -thresholds[best_index]
+        if lower_scores_are_more_anomalous
+        else thresholds[best_index]
+    )
+    metrics = {
+        "precision": float(usable_precision[best_index]),
+        "recall": float(usable_recall[best_index]),
+        "f1": float(f1_scores[best_index]),
+    }
+    return best_threshold, metrics
+
+
 def run_grid_search(X_train, y_train) -> GridSearchCV:
     print("\n--> Setting up GridSearchCV for hyperparameter tuning...")
     contamination = contamination_ratio(y_train)
@@ -141,7 +237,7 @@ def run_grid_search(X_train, y_train) -> GridSearchCV:
     return grid_search
 
 
-def train_default_model(X_train, y_train) -> IsolationForest:
+def train_isolation_forest_model(X_train, y_train) -> IsolationForest:
     print("\n--> Training Isolation Forest with default parameters...")
     contamination = contamination_ratio(y_train)
     model = IsolationForest(
@@ -156,6 +252,19 @@ def train_default_model(X_train, y_train) -> IsolationForest:
     return model
 
 
+def train_random_forest_model(X_train, y_train) -> RandomForestClassifier:
+    print("\n--> Training Random Forest classifier...")
+    model = RandomForestClassifier(
+        n_estimators=200,
+        max_depth=None,
+        class_weight="balanced_subsample",
+        n_jobs=-1,
+        random_state=42,
+    )
+    model.fit(X_train, y_train)
+    return model
+
+
 def main() -> None:
     args = parse_args()
     start_time = time.time()
@@ -165,18 +274,50 @@ def main() -> None:
     print(f"Number of anomalies: {int(y.sum())}")
 
     print("\n--> Splitting data into training and testing sets...")
-    X_train, X_test, y_train, y_test = train_test_split(
+    X_train_full, X_test, y_train_full, y_test = train_test_split(
         X_counts, y, test_size=0.3, random_state=42, stratify=y
     )
-    print(f"Training set size: {X_train.shape[0]}")
+    print(f"Training set size: {X_train_full.shape[0]}")
     print(f"Test set size: {X_test.shape[0]}")
 
-    if args.skip_grid_search:
-        model = train_default_model(X_train, y_train)
+    print("--> Reserving calibration split for threshold tuning...")
+    X_train, X_calibration, y_train, y_calibration = split_for_calibration(
+        X_train_full, y_train_full
+    )
+    print(f"Model training set size: {X_train.shape[0]}")
+    print(f"Calibration set size: {X_calibration.shape[0]}")
+
+    algorithm = args.algorithm
+    if algorithm == "random-forest" and not args.allow_supervised:
+        raise ValueError(
+            "Random Forest is a supervised algorithm and typically yields near-perfect scores on HDFS. "
+            "Re-run with --allow-supervised if you really want this baseline."
+        )
+    if algorithm == "isolation-forest":
+        if args.skip_grid_search:
+            model = train_isolation_forest_model(X_train, y_train)
+        else:
+            grid_search = run_grid_search(X_train, y_train)
+            model = grid_search.best_estimator_
+            print("\nModel training with best parameters complete.")
+        calibration_scores = model.decision_function(X_calibration)
+        test_scores = model.decision_function(X_test)
+        lower_scores_are_more_anomalous = True
+    elif algorithm == "random-forest":
+        if not args.skip_grid_search:
+            print(
+                "[warning] Grid search is currently only supported for Isolation Forest; "
+                "ignoring tuning request for Random Forest."
+            )
+        print(
+            "[warning] Training a supervised Random Forest on labeled data; metrics will reflect a fully supervised baseline."
+        )
+        model = train_random_forest_model(X_train, y_train)
+        calibration_scores = model.predict_proba(X_calibration)[:, 1]
+        test_scores = model.predict_proba(X_test)[:, 1]
+        lower_scores_are_more_anomalous = False
     else:
-        grid_search = run_grid_search(X_train, y_train)
-        model = grid_search.best_estimator_
-        print("\nModel training with best parameters complete.")
+        raise ValueError(f"Unsupported algorithm: {algorithm}")
 
     args.model_output_path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, args.model_output_path)
@@ -187,9 +328,39 @@ def main() -> None:
         json.dump(event_to_int, f, indent=2, sort_keys=True)
     print(f"Event vocabulary saved to '{args.vocab_output_path}'")
 
+    print("\n--> Calibrating decision threshold on held-out data...")
+    threshold, calibration_metrics = find_optimal_threshold(
+        calibration_scores,
+        y_calibration,
+        lower_scores_are_more_anomalous=lower_scores_are_more_anomalous,
+    )
+    print(
+        "Selected anomaly score threshold: "
+        f"{threshold:.6f} (F1={calibration_metrics['f1']:.4f}, "
+        f"precision={calibration_metrics['precision']:.4f}, "
+        f"recall={calibration_metrics['recall']:.4f})"
+    )
+
+    args.threshold_output_path.parent.mkdir(parents=True, exist_ok=True)
+    with args.threshold_output_path.open("w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "algorithm": algorithm,
+                "score_threshold": threshold,
+                "score_direction": "lower" if lower_scores_are_more_anomalous else "higher",
+                "calibration_metrics": calibration_metrics,
+                "calibration_size": int(y_calibration.shape[0]),
+            },
+            f,
+            indent=2,
+        )
+    print(f"Threshold saved to '{args.threshold_output_path}'")
+
     print("\n--> Evaluating model performance on the test set...")
-    y_pred = model.predict(X_test)
-    y_pred_mapped = map_if_predictions(y_pred)
+    if lower_scores_are_more_anomalous:
+        y_pred_mapped = np.where(test_scores < threshold, 1, 0)
+    else:
+        y_pred_mapped = np.where(test_scores >= threshold, 1, 0)
 
     print("\n--- Classification Report ---")
     print(classification_report(y_test, y_pred_mapped, target_names=["Normal", "Anomaly"]))
