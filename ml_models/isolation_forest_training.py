@@ -87,7 +87,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--calibration-beta",
         type=float,
-        default=1.0,
+        default=2.0,
         help=(
             "Beta value for F-beta scoring during threshold calibration. "
             "Values > 1 weight recall more heavily; values < 1 prefer precision."
@@ -96,7 +96,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--min-calibration-precision",
         type=float,
-        default=None,
+        default=0.75,
         help=(
             "Optional lower bound on precision when selecting the calibration threshold. "
             "If no threshold satisfies the constraint, the best unconstrained value is used."
