@@ -17,7 +17,8 @@ This target performs the full sequence:
 1. **Template mining** – `scripts/mine_templates.py` assigns stable `EventId`s.
 2. **Sequence building** – `scripts/build_sequences.py` produces `preprocessed/HDFS_sequences.npz`.
 3. **Training** – `ml_models/isolation_forest_training.py` fits the (default) unsupervised
-	 Isolation Forest, calibrates an F1-optimised decision threshold, and writes
+	 Isolation Forest with the tuned hyperparameters discovered during milestone analysis,
+	 calibrates a recall-aware decision threshold, and writes
 	 `isolation_forest_model.joblib`, `isolation_forest_event_vocab.json`, and
 	 `isolation_forest_threshold.json` (with algorithm metadata). A supervised Random Forest
 	 baseline remains available but now requires an explicit opt-in.
@@ -53,13 +54,25 @@ All intermediate and final artifacts live under `preprocessed/`, `ml_models/`, a
 	```
 
 - The calibrated threshold lives at `ml_models/isolation_forest_threshold.json`. Adjust or inspect it
-	to explore different precision/recall trade-offs without retraining.
+	to explore different precision/recall trade-offs without retraining. The training CLI now exposes
+	`--calibration-beta` (defaults to 1.0) to tilt the threshold towards recall (use values > 1) or
+	precision (values < 1), and `--min-calibration-precision` to enforce a floor on precision when
+	selecting the threshold.
 
 - Use alternate datasets by overriding `DATA_CSV`/`LABELS_CSV` when invoking make:
 
 	```bash
 	make pipeline DATA_CSV=data/HDFS_2k.csv LABELS_CSV=data/anomaly_label.csv
 	```
+
+- To favour recall (e.g., for incident detection), tilt the calibration objective:
+
+	```bash
+	make pipeline TRAIN_FLAGS="--skip-grid-search --calibration-beta 2 --min-calibration-precision 0.75"
+	```
+
+	The `beta` value emphasises recall when greater than 1 while the optional precision floor keeps
+	alert volume in check.
 
 ### Validation summary
 

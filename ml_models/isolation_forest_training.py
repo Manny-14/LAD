@@ -84,6 +84,24 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Train with a sensible default configuration instead of running GridSearchCV.",
     )
+    parser.add_argument(
+        "--calibration-beta",
+        type=float,
+        default=1.0,
+        help=(
+            "Beta value for F-beta scoring during threshold calibration. "
+            "Values > 1 weight recall more heavily; values < 1 prefer precision."
+        ),
+    )
+    parser.add_argument(
+        "--min-calibration-precision",
+        type=float,
+        default=None,
+        help=(
+            "Optional lower bound on precision when selecting the calibration threshold. "
+            "If no threshold satisfies the constraint, the best unconstrained value is used."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -162,6 +180,8 @@ def find_optimal_threshold(
     labels: np.ndarray,
     *,
     lower_scores_are_more_anomalous: bool,
+    beta: float = 1.0,
+    min_precision: float | None = None,
 ) -> tuple[float, dict[str, float]]:
     """Compute the anomaly score threshold that maximizes F1 on calibration data."""
     if scores.size == 0 or labels.size == 0:
@@ -171,35 +191,62 @@ def find_optimal_threshold(
     precision, recall, thresholds = precision_recall_curve(labels, working_scores)
     if thresholds.size == 0:
         # Fallback to default decision boundary at 0 if we only observed one class
+        fallback_precision = float(precision[-1])
+        fallback_recall = float(recall[-1])
         baseline_f1 = float(
-            2
-            * precision[-1]
-            * recall[-1]
-            / max(precision[-1] + recall[-1], 1e-12)
+            2 * fallback_precision * fallback_recall
+            / max(fallback_precision + fallback_recall, 1e-12)
+        )
+        beta_sq = float(beta) ** 2
+        baseline_f_beta = float(
+            (1 + beta_sq)
+            * fallback_precision
+            * fallback_recall
+            / max(beta_sq * fallback_precision + fallback_recall, 1e-12)
         )
         default_threshold = 0.0 if lower_scores_are_more_anomalous else 0.5
         return default_threshold, {
-            "precision": float(precision[-1]),
-            "recall": float(recall[-1]),
+            "precision": fallback_precision,
+            "recall": fallback_recall,
             "f1": baseline_f1,
+            "f_beta": baseline_f_beta,
         }
 
     usable_precision = precision[:-1]
     usable_recall = recall[:-1]
-    f1_scores = 2 * usable_precision * usable_recall / np.clip(
-        usable_precision + usable_recall, 1e-12, None
+    beta_sq = float(beta) ** 2
+    f_beta_scores = (1 + beta_sq) * usable_precision * usable_recall / np.clip(
+        beta_sq * usable_precision + usable_recall, 1e-12, None
     )
-    best_index = int(np.nanargmax(f1_scores))
+
+    if min_precision is not None:
+        feasible = usable_precision >= min_precision
+        if not np.any(feasible):
+            print(
+                "No calibration threshold satisfied the requested precision constraint; "
+                "falling back to the best unconstrained threshold."
+            )
+        else:
+            f_beta_scores = np.where(feasible, f_beta_scores, -np.inf)
+
+    best_index = int(np.nanargmax(f_beta_scores))
 
     best_threshold = float(
         -thresholds[best_index]
         if lower_scores_are_more_anomalous
         else thresholds[best_index]
     )
+    chosen_precision = float(usable_precision[best_index])
+    chosen_recall = float(usable_recall[best_index])
+    f1_score_value = float(
+        2 * chosen_precision * chosen_recall
+        / max(chosen_precision + chosen_recall, 1e-12)
+    )
     metrics = {
-        "precision": float(usable_precision[best_index]),
-        "recall": float(usable_recall[best_index]),
-        "f1": float(f1_scores[best_index]),
+        "precision": chosen_precision,
+        "recall": chosen_recall,
+        "f1": f1_score_value,
+        "f_beta": float(f_beta_scores[best_index]),
     }
     return best_threshold, metrics
 
@@ -241,10 +288,10 @@ def train_isolation_forest_model(X_train, y_train) -> IsolationForest:
     print("\n--> Training Isolation Forest with default parameters...")
     contamination = contamination_ratio(y_train)
     model = IsolationForest(
-        n_estimators=200,
-        max_samples="auto",
+        n_estimators=100,
+        max_samples=1.0,
         contamination=contamination,
-        max_features=1.0,
+        max_features=0.75,
         random_state=42,
         n_jobs=-1,
     )
@@ -267,6 +314,10 @@ def train_random_forest_model(X_train, y_train) -> RandomForestClassifier:
 
 def main() -> None:
     args = parse_args()
+    if args.calibration_beta <= 0:
+        raise ValueError("--calibration-beta must be positive.")
+    if args.min_calibration_precision is not None and not (0.0 < args.min_calibration_precision < 1.0):
+        raise ValueError("--min-calibration-precision must be between 0 and 1 (exclusive).")
     start_time = time.time()
 
     X_sequences, y = load_sequences(args.data_path)
@@ -333,10 +384,18 @@ def main() -> None:
         calibration_scores,
         y_calibration,
         lower_scores_are_more_anomalous=lower_scores_are_more_anomalous,
+        beta=args.calibration_beta,
+        min_precision=args.min_calibration_precision,
+    )
+    score_label = "F1" if abs(args.calibration_beta - 1.0) < 1e-6 else f"F{args.calibration_beta:.2f}"
+    representative_score = (
+        calibration_metrics["f1"]
+        if abs(args.calibration_beta - 1.0) < 1e-6
+        else calibration_metrics["f_beta"]
     )
     print(
         "Selected anomaly score threshold: "
-        f"{threshold:.6f} (F1={calibration_metrics['f1']:.4f}, "
+        f"{threshold:.6f} ({score_label}={representative_score:.4f}, "
         f"precision={calibration_metrics['precision']:.4f}, "
         f"recall={calibration_metrics['recall']:.4f})"
     )
@@ -350,6 +409,10 @@ def main() -> None:
                 "score_direction": "lower" if lower_scores_are_more_anomalous else "higher",
                 "calibration_metrics": calibration_metrics,
                 "calibration_size": int(y_calibration.shape[0]),
+                "calibration_beta": float(args.calibration_beta),
+                "min_calibration_precision": (
+                    None if args.min_calibration_precision is None else float(args.min_calibration_precision)
+                ),
             },
             f,
             indent=2,
