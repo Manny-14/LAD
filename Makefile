@@ -68,7 +68,7 @@ $(SUMMARY_JSON): $(SEQUENCES_NPZ) $(PREDICTIONS_CSV)
 		--output $(SUMMARY_JSON)
 
 tests:
-	$(PYTHON) -m unittest scripts.test_mine_templates scripts.test_build_sequences ml_models.test_isolation_forest_training
+	$(PYTHON) -m unittest scripts.test_mine_templates scripts.test_build_sequences scripts.test_guardrails ml_models.test_isolation_forest_training
 
 clean:
 	rm -f $(STRUCTURED_CSV) $(TEMPLATES_JSON) $(EVENT_MAP_JSON) \
