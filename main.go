@@ -21,14 +21,14 @@ func main() {
 	// Open input file
 	inputFile, err := os.Open(inputPath)
 	if err != nil {
-		log.Fatal("Error opening input file: %w", err)
+		log.Fatalf("Error opening input file: %v", err)
 	}
 	defer inputFile.Close()
 
 	// Create output file
 	outputFile, err := os.Create(outputPath)
 	if err != nil {
-		log.Fatal("Error creating output CSV file: %w", err)
+		log.Fatalf("Error creating output CSV file: %v", err)
 	}
 	defer outputFile.Close()
 
@@ -37,7 +37,7 @@ func main() {
 
 	header := []string{"timestamp", "pid", "severity", "component", "message"}
 	if err := csvWriter.Write(header); err != nil {
-		log.Fatalf("Error writing CSV header: %w", err)
+		log.Fatalf("Error writing CSV header: %v", err)
 	}
 
 	// process log file
@@ -47,18 +47,18 @@ func main() {
 		logEntry, err := parser.ParseLogLine(line)
 		if err != nil {
 			// Log errors to stderr instead of stdout
-			log.Printf("Warning: Skipping malformed line: %q (%w)\n", line, err)
+			log.Printf("Warning: Skipping malformed line: %q (%v)\n", line, err)
 			continue
 		}
 
 		record := logEntryToRecord(logEntry)
 		if err := csvWriter.Write(record); err != nil {
-			log.Printf("Warning: Could not write record to CSV: %w", err)
+			log.Printf("Warning: Could not write record to CSV: %v", err)
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		log.Fatalf("Error reading from file: %w", err)
+		log.Fatalf("Error reading from file: %v", err)
 	}
 
 	log.Printf("Successfully processed log file and saved structured data to %s\n", outputPath)

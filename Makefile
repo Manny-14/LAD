@@ -11,10 +11,16 @@ VOCAB_JSON ?= ml_models/isolation_forest_event_vocab.json
 THRESHOLD_JSON ?= ml_models/isolation_forest_threshold.json
 PREDICTIONS_CSV ?= outputs/isolation_forest_predictions.csv
 SUMMARY_JSON ?= outputs/pipeline_run_summary.json
+SUMMARY_TEXT ?= outputs/anomaly_summary.txt
+LOG_PATH ?= data/HDFS.log
+SUMMARY_TOP ?= 20
+GEMINI_MODEL ?= gemini-1.5-flash
+GO ?= go
+LLM_FLAGS ?=
 TRAIN_FLAGS ?= --skip-grid-search
 TRAIN_ALGO ?= isolation-forest
 
-.PHONY: pipeline preprocess sequences train infer summary tests clean
+.PHONY: pipeline preprocess sequences train infer summary summarize tests clean
 
 pipeline: preprocess sequences train infer summary tests
 
@@ -67,6 +73,16 @@ $(SUMMARY_JSON): $(SEQUENCES_NPZ) $(PREDICTIONS_CSV)
 		--predictions $(PREDICTIONS_CSV) \
 		--output $(SUMMARY_JSON)
 
+summarize: $(SUMMARY_TEXT)
+
+$(SUMMARY_TEXT): $(PREDICTIONS_CSV) $(LOG_PATH)
+	$(GO) run ./cmd/summarize \
+		--predictions $(PREDICTIONS_CSV) \
+		--logs $(LOG_PATH) \
+		--output $(SUMMARY_TEXT) \
+		--model $(GEMINI_MODEL) \
+		--top $(SUMMARY_TOP) $(LLM_FLAGS)
+
 tests:
 	$(PYTHON) -m unittest scripts.test_mine_templates scripts.test_build_sequences scripts.test_guardrails ml_models.test_isolation_forest_training
 
@@ -74,4 +90,4 @@ clean:
 	rm -f $(STRUCTURED_CSV) $(TEMPLATES_JSON) $(EVENT_MAP_JSON) \
 		$(SEQUENCES_NPZ) $(BLOCK_INDEX_CSV) \
 		$(MODEL_PATH) $(VOCAB_JSON) $(THRESHOLD_JSON) \
-		$(PREDICTIONS_CSV) $(SUMMARY_JSON)
+		$(PREDICTIONS_CSV) $(SUMMARY_JSON) $(SUMMARY_TEXT)

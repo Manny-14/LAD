@@ -29,6 +29,9 @@ This target performs the full sequence:
 5. **Summary + validation** – `scripts/pipeline_summary.py` compares predictions against labels,
 	 stores results in `outputs/pipeline_run_summary.json`, and unit tests are re-run to guard the
 	 preprocessing steps.
+6. **LLM summarisation** – `make summarize` (or run `go run ./cmd/summarize`) collects the top
+	 anomalies, gathers their raw log lines, and sends them to a Gemini model for a plain-English
+	 incident brief. Use `--dry-run` or set `LLM_FLAGS=--dry-run` while setting up credentials.
 
 All intermediate and final artifacts live under `preprocessed/`, `ml_models/`, and `outputs/`.
 
@@ -86,6 +89,20 @@ lower scores indicate anomalies. Inspect it after each run:
 cat outputs/pipeline_run_summary.json | jq
 ```
 
+### Anomaly summarization
+
+To generate a human-readable incident brief from the latest predictions, provide a Gemini API key
+via `GEMINI_API_KEY` (or the `--api-key` flag) and run:
+
+```bash
+make summarize
+```
+
+The helper command streams the raw log lines associated with the top anomalies, prepares an
+operations-focused prompt, and calls Gemini (default model: `gemini-1.5-flash`). To preview the
+prompt without calling the LLM, either export `LLM_FLAGS=--dry-run` before invoking the make target
+or run `go run ./cmd/summarize --dry-run` manually.
+
 ### Related commands
 
 | Command | Purpose |
@@ -95,6 +112,7 @@ cat outputs/pipeline_run_summary.json | jq
 | `make train` | Fit the selected model (Random Forest or Isolation Forest) |
 | `make infer` | Regenerate predictions using the saved model + calibrated threshold |
 | `make summary` | Refresh the JSON metrics report |
+| `make summarize` | Generate a natural-language anomaly report (requires Gemini API key or `LLM_FLAGS=--dry-run`) |
 | `make tests` | Execute preprocessing + model smoke tests |
 | `make clean` | Remove generated artifacts |
 
