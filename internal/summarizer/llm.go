@@ -11,7 +11,7 @@ import (
 )
 
 // DefaultModel is the suggested Gemini model for summarisation.
-const DefaultModel = "gemini-1.5-flash"
+const DefaultModel = "gemini-2.5-flash"
 
 // LLMClient defines the behaviour required to obtain anomaly summaries.
 type LLMClient interface {

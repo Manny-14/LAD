@@ -72,7 +72,7 @@ func parseFlags() cliConfig {
 	flag.StringVar(&cfg.SystemPrompt, "prompt", "", "Optional custom system prompt prefix for the LLM request")
 	flag.IntVar(&cfg.MaxLinesPerBlock, "max-lines", 100, "Maximum log lines to include per block (0 means unlimited)")
 	flag.StringVar(&cfg.APIKey, "api-key", "", "Gemini API key (falls back to GEMINI_API_KEY/GOOGLE_API_KEY env vars)")
-	flag.StringVar(&cfg.ModelID, "model", summarizer.DefaultModel, "Gemini model id to use (e.g. gemini-1.5-flash)")
+	flag.StringVar(&cfg.ModelID, "model", summarizer.DefaultModel, "Gemini model id to use (e.g. gemini-2.5-flash)")
 	flag.BoolVar(&cfg.DryRun, "dry-run", false, "Skip the LLM call and output the assembled prompt instead")
 
 	flag.Parse()
