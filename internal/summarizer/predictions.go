@@ -10,13 +10,13 @@ import (
 	"strings"
 )
 
-// Prediction captures a single row from the inference output.
+// Prediction captures a single row from the inference output together with threshold metadata.
 type Prediction struct {
-	BlockID           string
-	Prediction        int
-	AnomalyScore      float64
-	DecisionThreshold float64
-	ScoreDirection    string
+	BlockID           string  // Identifier of the HDFS block under evaluation.
+	Prediction        int     // Binary isolation-forest prediction (1 == anomalous).
+	AnomalyScore      float64 // Raw anomaly score produced by the detector.
+	DecisionThreshold float64 // Score boundary chosen during calibration to separate normal/anomalous.
+	ScoreDirection    string  // Indicates whether higher or lower scores represent more anomalous behaviour.
 }
 
 // LoadAnomalies parses the predictions CSV and returns rows flagged as anomalous (prediction == 1).
@@ -124,6 +124,8 @@ func RankAnomalies(anomalies []Prediction, topN int) []Prediction {
 	return anomalies[:topN]
 }
 
+// severity computes a signed distance between the anomaly score and the calibrated decision threshold.
+// Positive values indicate higher severity and determine the ranking order.
 func severity(p Prediction) float64 {
 	direction := strings.ToLower(p.ScoreDirection)
 

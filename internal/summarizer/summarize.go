@@ -9,14 +9,14 @@ import (
 	"strings"
 )
 
-// SummaryConfig groups inputs needed for summarisation.
+// SummaryConfig groups the artefacts and options required to build an anomaly summary.
 type SummaryConfig struct {
-	PredictionsPath  string
-	LogPath          string
-	OutputPath       string
-	TopN             int
-	SystemPrompt     string
-	MaxLinesPerBlock int
+	PredictionsPath  string // Path to the predictions CSV emitted by the inference step.
+	LogPath          string // Path to the raw HDFS log file used to extract contextual lines.
+	OutputPath       string // Optional path where the generated summary should be persisted.
+	TopN             int    // Number of most severe anomalies to include (<=0 keeps every anomaly).
+	SystemPrompt     string // Optional system preamble to steer the LLM response style.
+	MaxLinesPerBlock int    // Caps log lines per block to keep prompts within token limits.
 }
 
 // GenerateSummary orchestrates anomaly extraction, log retrieval, prompt generation, and LLM invocation.
