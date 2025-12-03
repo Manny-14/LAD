@@ -20,8 +20,9 @@ func BuildPrompt(anomalies []Prediction, logs map[string][]string, systemPrompt 
 		b.WriteString("\n")
 	}
 
-	b.WriteString("Analyze the following anomalous Hadoop Distributed File System (HDFS) blocks and provide a concise incident-oriented summary for an on-call site reliability engineer. Highlight root causes, impacted components, and any remediation suggestions.\n\n")
-
+	b.WriteString("Analyze the following anomalous Hadoop Distributed File System (HDFS) blocks " +
+		"and provide a concise incident-oriented summary for an on-call site reliability engineer. " +
+		"Highlight root causes, impacted components, and any remediation suggestions.\n\n")
 	for idx, anomaly := range anomalies {
 		b.WriteString(fmt.Sprintf("Block %d: %s\n", idx+1, anomaly.BlockID))
 		if len(logs[anomaly.BlockID]) == 0 {
